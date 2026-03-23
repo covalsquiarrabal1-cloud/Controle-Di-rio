@@ -1,0 +1,5 @@
+{
+  "name": "VozFinance - Gestor de Despesas por Voz",
+  "description": "Controle suas finanças falando. Adicione despesas por voz, visualize resumos semanais/mensais e exporte para Excel ou PDF.",
+  "requestFramePermissions": ["microphone"]
+}
