@@ -24,6 +24,49 @@ export default function VozFinance() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<ParsedExpense | null>(null);
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualForm, setManualForm] = useState<ParsedExpense>({
+    description: '',
+    amount: 0,
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  const handleManualSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualForm.description || manualForm.amount <= 0) return;
+
+    setIsProcessing(true);
+    try {
+      if (!supabase) {
+        throw new Error("Supabase client not initialized");
+      }
+      const { data, error } = await supabase
+        .from('expenses')
+        .insert([manualForm])
+        .select();
+
+      if (error) throw error;
+      if (data) {
+        setExpenses(prev => [data[0], ...prev]);
+        setManualForm({
+          description: '',
+          amount: 0,
+          date: new Date().toISOString().split('T')[0]
+        });
+        setShowManualInput(false);
+      }
+    } catch (e) {
+      console.error("Failed to save manual entry to Supabase", e);
+      const newExpense: Expense = {
+        ...manualForm,
+        id: crypto.randomUUID(),
+      };
+      setExpenses(prev => [newExpense, ...prev]);
+      setShowManualInput(false);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // Load from Supabase on mount
   useEffect(() => {
@@ -87,12 +130,33 @@ export default function VozFinance() {
 
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
+      console.log("Transcript received:", text);
       setTranscript(text);
       handleVoiceInput(text);
     };
 
     recognition.onerror = (event: any) => {
       console.error("Speech recognition error", event.error);
+      let errorMessage = "Erro no reconhecimento de voz.";
+      
+      switch (event.error) {
+        case 'not-allowed':
+          errorMessage = "Permissão de microfone negada. Por favor, habilite o microfone nas configurações do seu navegador.";
+          break;
+        case 'no-speech':
+          errorMessage = "Nenhuma voz detectada. Tente falar novamente.";
+          break;
+        case 'network':
+          errorMessage = "Erro de rede. Verifique sua conexão com a internet.";
+          break;
+        case 'aborted':
+          errorMessage = "Reconhecimento de voz interrompido.";
+          break;
+        default:
+          errorMessage = `Erro: ${event.error}. Tente novamente.`;
+      }
+      
+      alert(errorMessage);
       setIsRecording(false);
     };
 
@@ -111,31 +175,36 @@ export default function VozFinance() {
     }
 
     setIsProcessing(true);
-    const parsed = await parseExpenseFromVoice(text);
-    if (parsed) {
-      try {
-        if (!supabase) {
-          throw new Error("Supabase client not initialized");
-        }
-        const { data, error } = await supabase
-          .from('expenses')
-          .insert([parsed])
-          .select();
+    try {
+      const parsed = await parseExpenseFromVoice(text);
+      if (parsed) {
+        try {
+          if (!supabase) {
+            throw new Error("Supabase client not initialized");
+          }
+          const { data, error } = await supabase
+            .from('expenses')
+            .insert([parsed])
+            .select();
 
-        if (error) throw error;
-        if (data) {
-          setExpenses(prev => [data[0], ...prev]);
+          if (error) throw error;
+          if (data) {
+            setExpenses(prev => [data[0], ...prev]);
+          }
+        } catch (e) {
+          console.error("Failed to save to Supabase", e);
+          const newExpense: Expense = {
+            ...parsed,
+            id: crypto.randomUUID(),
+          };
+          setExpenses(prev => [newExpense, ...prev]);
         }
-      } catch (e) {
-        console.error("Failed to save to Supabase", e);
-        const newExpense: Expense = {
-          ...parsed,
-          id: crypto.randomUUID(),
-        };
-        setExpenses(prev => [newExpense, ...prev]);
+      } else {
+        alert("Não consegui entender a despesa. Tente falar algo como: 'Almoço 45 reais hoje'");
       }
-    } else {
-      alert("Não consegui entender a despesa. Tente falar algo como: 'Almoço 45 reais hoje'");
+    } catch (error) {
+      console.error("Error during voice processing:", error);
+      alert("Ocorreu um erro ao processar sua voz com a IA. Verifique se a chave da API do Gemini está correta.");
     }
     setIsProcessing(false);
   };
@@ -337,6 +406,70 @@ export default function VozFinance() {
               >
                 &quot;{transcript}&quot;
               </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="mt-8">
+            <button 
+              onClick={() => setShowManualInput(!showManualInput)}
+              className="text-stone-400 text-xs font-bold uppercase tracking-widest hover:text-white transition-colors"
+            >
+              {showManualInput ? "Fechar formulário" : "Ou digite manualmente"}
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {showManualInput && (
+              <motion.form
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                onSubmit={handleManualSubmit}
+                className="mt-8 w-full max-w-md space-y-4 bg-white/5 p-6 rounded-3xl border border-white/10"
+              >
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-widest text-stone-400">Descrição</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Almoço"
+                    value={manualForm.description}
+                    onChange={e => setManualForm(prev => ({ ...prev, description: e.target.value }))}
+                    className="w-full bg-white/10 border border-white/10 rounded-xl px-4 py-2 text-white placeholder:text-stone-600 focus:outline-none focus:border-white/30"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-stone-400">Valor (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      placeholder="0.00"
+                      value={manualForm.amount || ''}
+                      onChange={e => setManualForm(prev => ({ ...prev, amount: parseFloat(e.target.value) }))}
+                      className="w-full bg-white/10 border border-white/10 rounded-xl px-4 py-2 text-white placeholder:text-stone-600 focus:outline-none focus:border-white/30"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-stone-400">Data</label>
+                    <input
+                      type="date"
+                      required
+                      value={manualForm.date}
+                      onChange={e => setManualForm(prev => ({ ...prev, date: e.target.value }))}
+                      className="w-full bg-white/10 border border-white/10 rounded-xl px-4 py-2 text-white focus:outline-none focus:border-white/30"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full bg-white text-stone-900 font-bold py-3 rounded-xl hover:bg-stone-100 transition-colors disabled:opacity-50"
+                >
+                  {isProcessing ? "Salvando..." : "Adicionar Despesa"}
+                </button>
+              </motion.form>
             )}
           </AnimatePresence>
         </div>
