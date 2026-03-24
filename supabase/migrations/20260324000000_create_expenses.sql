@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
 -- For now, we'll allow all access for simplicity, but in production, we'd restrict by user_id
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow public access to expenses" ON public.expenses;
 CREATE POLICY "Allow public access to expenses"
 ON public.expenses
 FOR ALL
