@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Plus, Trash2, Edit2, Download, PieChart, Calendar, Wallet, Check, X, FileText, Table } from 'lucide-react';
+import { Mic, MicOff, Plus, Trash2, Edit2, Download, PieChart, Calendar, Wallet, Check, X, FileText, Table, Loader2 } from 'lucide-react';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { parseExpenseFromVoice, ParsedExpense } from '@/lib/gemini';
+import { supabase } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -16,30 +17,55 @@ interface Expense extends ParsedExpense {
 }
 
 export default function VozFinance() {
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('vozfinance_expenses');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) return parsed;
-        } catch (e) {
-          console.error("Failed to load expenses", e);
-        }
-      }
-    }
-    return [];
-  });
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<ParsedExpense | null>(null);
 
-  // Save to localStorage whenever expenses change
+  // Load from Supabase on mount
   useEffect(() => {
-    localStorage.setItem('vozfinance_expenses', JSON.stringify(expenses));
-  }, [expenses]);
+    fetchExpenses();
+  }, []);
+
+  const fetchExpenses = async () => {
+    setIsLoading(true);
+    try {
+      if (!supabase) {
+        throw new Error("Supabase client not initialized");
+      }
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .order('date', { ascending: false });
+
+      if (error) throw error;
+      setExpenses(data || []);
+    } catch (e) {
+      console.error("Failed to load expenses from Supabase", e);
+      // Fallback to localStorage if Supabase fails
+      const saved = localStorage.getItem('vozfinance_expenses');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) setExpenses(parsed);
+        } catch (err) {
+          console.error("Failed to load expenses from localStorage", err);
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Sync to localStorage as secondary backup
+  useEffect(() => {
+    if (!isLoading) {
+      localStorage.setItem('vozfinance_expenses', JSON.stringify(expenses));
+    }
+  }, [expenses, isLoading]);
 
   // Speech Recognition Setup
   const startRecording = () => {
@@ -81,11 +107,27 @@ export default function VozFinance() {
     setIsProcessing(true);
     const parsed = await parseExpenseFromVoice(text);
     if (parsed) {
-      const newExpense: Expense = {
-        ...parsed,
-        id: crypto.randomUUID(),
-      };
-      setExpenses(prev => [newExpense, ...prev]);
+      try {
+        if (!supabase) {
+          throw new Error("Supabase client not initialized");
+        }
+        const { data, error } = await supabase
+          .from('expenses')
+          .insert([parsed])
+          .select();
+
+        if (error) throw error;
+        if (data) {
+          setExpenses(prev => [data[0], ...prev]);
+        }
+      } catch (e) {
+        console.error("Failed to save to Supabase", e);
+        const newExpense: Expense = {
+          ...parsed,
+          id: crypto.randomUUID(),
+        };
+        setExpenses(prev => [newExpense, ...prev]);
+      }
     } else {
       alert("Não consegui entender a despesa. Tente falar algo como: 'Almoço 45 reais hoje'");
     }
@@ -93,8 +135,22 @@ export default function VozFinance() {
   };
 
   // Actions
-  const deleteExpense = (id: string) => {
-    setExpenses(prev => prev.filter(e => e.id !== id));
+  const deleteExpense = async (id: string) => {
+    try {
+      if (!supabase) {
+        throw new Error("Supabase client not initialized");
+      }
+      const { error } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setExpenses(prev => prev.filter(e => e.id !== id));
+    } catch (e) {
+      console.error("Failed to delete from Supabase", e);
+      setExpenses(prev => prev.filter(e => e.id !== id));
+    }
   };
 
   const startEditing = (expense: Expense) => {
@@ -102,11 +158,26 @@ export default function VozFinance() {
     setEditForm({ ...expense });
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (editingId && editForm) {
-      setExpenses(prev => prev.map(e => e.id === editingId ? { ...editForm, id: editingId } : e));
-      setEditingId(null);
-      setEditForm(null);
+      try {
+        if (!supabase) {
+          throw new Error("Supabase client not initialized");
+        }
+        const { error } = await supabase
+          .from('expenses')
+          .update(editForm)
+          .eq('id', editingId);
+
+        if (error) throw error;
+        setExpenses(prev => prev.map(e => e.id === editingId ? { ...editForm, id: editingId } : e));
+      } catch (e) {
+        console.error("Failed to update in Supabase", e);
+        setExpenses(prev => prev.map(e => e.id === editingId ? { ...editForm, id: editingId } : e));
+      } finally {
+        setEditingId(null);
+        setEditForm(null);
+      }
     }
   };
 
@@ -273,8 +344,14 @@ export default function VozFinance() {
         </div>
 
         <div className="space-y-4">
-          <AnimatePresence mode="popLayout">
-            {expenses.map((expense) => (
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 bg-stone-50 rounded-[3rem] border border-stone-100">
+              <Loader2 className="w-10 h-10 text-stone-300 animate-spin mb-4" />
+              <p className="text-stone-400 font-medium">Carregando suas despesas...</p>
+            </div>
+          ) : (
+            <AnimatePresence mode="popLayout">
+              {expenses.map((expense) => (
               <motion.div
                 key={expense.id}
                 layout
@@ -350,8 +427,9 @@ export default function VozFinance() {
               </motion.div>
             ))}
           </AnimatePresence>
+          )}
 
-          {expenses.length === 0 && (
+          {!isLoading && expenses.length === 0 && (
             <div className="text-center py-20 bg-stone-50 rounded-[3rem] border-2 border-dashed border-stone-200">
               <p className="text-stone-400 font-medium">Nenhuma despesa registrada ainda.</p>
               <p className="text-xs text-stone-300 mt-1">Use o microfone acima para começar.</p>
