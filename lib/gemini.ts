@@ -20,35 +20,73 @@ export interface ParsedExpense {
 }
 
 export async function parseExpenseFromVoice(text: string): Promise<ParsedExpense | null> {
+  if (!text || text.trim().length === 0) {
+    console.warn("Empty text provided to parseExpenseFromVoice");
+    return null;
+  }
+
   try {
     const ai = getAI();
+    const today = new Date().toISOString().split('T')[0];
+    
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Extraia as informações de despesa do seguinte texto: "${text}". 
-      Retorne um JSON com os campos: description (string), amount (number), date (string no formato YYYY-MM-DD).
-      Se a data não for mencionada, use a data de hoje: ${new Date().toISOString().split('T')[0]}.
-      Se o valor não for claro, tente inferir ou retorne null se não for possível extrair nada útil.`,
+      contents: [{ parts: [{ text: `Analise este texto de voz e extraia os dados da despesa: "${text}"` }] }],
       config: {
+        systemInstruction: `Você é um assistente financeiro especializado em extrair dados de despesas a partir de transcrições de voz em Português.
+        Sua tarefa é extrair:
+        1. Descrição (o que foi comprado ou pago)
+        2. Valor (o custo numérico)
+        3. Data (no formato YYYY-MM-DD)
+
+        Regras:
+        - Se a data não for mencionada (ex: "hoje", "ontem", "segunda"), use a data de referência fornecida: ${today}.
+        - Se o texto disser "ontem", calcule a data correta baseada em ${today}.
+        - O valor deve ser um número puro (ex: 45.50).
+        - A descrição deve ser curta e clara.
+        - Se não houver informações suficientes para extrair pelo menos a descrição e o valor, retorne um objeto com valores nulos ou vazios.`,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            description: { type: Type.STRING },
-            amount: { type: Type.NUMBER },
-            date: { type: Type.STRING },
+            description: { 
+              type: Type.STRING,
+              description: "Breve descrição da despesa"
+            },
+            amount: { 
+              type: Type.NUMBER,
+              description: "Valor numérico da despesa"
+            },
+            date: { 
+              type: Type.STRING,
+              description: "Data no formato YYYY-MM-DD"
+            },
           },
           required: ["description", "amount", "date"],
         },
       },
     });
 
-    const result = JSON.parse(response.text || "{}");
-    if (result.description && result.amount) {
-      return result as ParsedExpense;
+    if (!response.text) {
+      console.error("Gemini returned an empty response");
+      return null;
     }
+
+    const result = JSON.parse(response.text);
+    console.log("Gemini parsed result:", result);
+
+    if (result.description && typeof result.amount === 'number' && result.amount > 0) {
+      return {
+        description: String(result.description),
+        amount: result.amount,
+        date: result.date || today
+      };
+    }
+    
+    console.warn("Gemini result missing required fields or invalid amount:", result);
     return null;
   } catch (error) {
-    console.error("Error parsing expense:", error);
+    console.error("Error parsing expense with Gemini:", error);
     return null;
   }
 }

@@ -104,6 +104,12 @@ export default function VozFinance() {
   };
 
   const handleVoiceInput = async (text: string) => {
+    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+      alert("Configuração incompleta: A chave da API do Gemini (NEXT_PUBLIC_GEMINI_API_KEY) não foi encontrada nos segredos do projeto.");
+      setIsProcessing(false);
+      return;
+    }
+
     setIsProcessing(true);
     const parsed = await parseExpenseFromVoice(text);
     if (parsed) {
